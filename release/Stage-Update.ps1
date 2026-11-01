@@ -61,7 +61,7 @@ foreach ($dir in @('SEP','Bio')) {
  $stampArgs=@('-f',$inf,'-a','amd64','-d','10/31/2026','-v',$DriverVersion)
  if($dir -eq 'Bio'){$stampArgs+=@('-u','2.15.0')}else{$stampArgs+=@('-k','1.15')}
  Run-Checked (Join-Path $SdkBin 'x64\stampinf.exe') $stampArgs
- Run-Checked (Join-Path $SdkBin 'x86\Inf2Cat.exe') @('/driver:'+(Join-Path $out $dir),'/os:10_GE_X64','/uselocaltime')
+ Run-Checked (Join-Path $SdkBin 'x86\Inf2Cat.exe') @(('/driver:'+(Join-Path $out $dir)),'/os:10_GE_X64','/uselocaltime')
  $cat = Get-ChildItem (Join-Path $out $dir) -Filter '*.cat'
  Run-Checked $signTool @('sign','/fd','SHA256','/sha1',$CertificateThumbprint,$cat.FullName)
 }
@@ -77,4 +77,5 @@ foreach ($dir in @('SEP','Bio')) {
 $manifest = @(Get-ChildItem $out -File -Recurse | Sort-Object FullName | ForEach-Object { [pscustomobject]@{path=$_.FullName.Substring($out.Length+1).Replace('\','/'); sha256=(Get-FileHash $_.FullName).Hash} })
 $manifest | ConvertTo-Json | Set-Content (Join-Path $out 'SHA256SUMS.json')
 Write-Output "Staged $out from $commit. Run validation before archiving."
+
 
