@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // Client.cpp
 #include "Client.h"
+#include "../Discovery/StartupOrdering.h"
 #include "../../driver/T2TouchIdTransport/public.h"
 #include <setupapi.h>
 #include <cstring>
@@ -102,6 +103,8 @@ AksResult Client::GetStatus(bool* pciPresent, bool* bar4Mapped, bool* oolRegiste
 }
 
 AksResult Client::RegisterOol() {
+    t2::startup::StartupLock ordering;
+    if (!ordering.owned()) return AksResult::NotReady;
     DWORD returned = 0;
     if (!DeviceIoControl(handle_, IOCTL_T2_REGISTER_OOL, nullptr, 0, nullptr, 0, &returned, nullptr)) {
         DWORD err = GetLastError();
@@ -147,6 +150,8 @@ AksResult Client::Exchange(uint8_t operation, const std::vector<uint8_t>& reques
     if (outSepStatus) {
         *outSepStatus = 0;
     }
+    t2::startup::StartupLock ordering;
+    if (!ordering.owned()) return AksResult::NotReady;
     std::vector<uint8_t> in(sizeof(T2_AKS_EXCHANGE_IN) + request.size(), 0);
     auto* inHeader = reinterpret_cast<T2_AKS_EXCHANGE_IN*>(in.data());
     inHeader->Operation = operation;

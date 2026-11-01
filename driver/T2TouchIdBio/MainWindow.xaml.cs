@@ -1041,9 +1041,14 @@ namespace T2TouchId.SepVaultGui
                     break;
 
                 case SepBootstrapReason.SepHang:
-                    SetBanner(DotError, "SEP is not responding" + when,
-                        "The Apple Secure Enclave is not answering requests (hardware hang).");
+                    SetBanner(DotError, "SEP exchange failed" + when,
+                        "No validated SEP response was received. Check startup ordering and transport diagnostics; a timeout alone does not establish a hardware hang.");
                     SepHangPanel.Visibility = Visibility.Visible;
+                    break;
+
+                case SepBootstrapReason.DiscoveryFailed:
+                    SetBanner(DotError, "BridgeOS readiness failed" + when,
+                        "Discovery did not finish before its deadline or was cancelled. SEP initialization was skipped; inspect ordering diagnostics.");
                     break;
 
                 case SepBootstrapReason.SepRejected:
@@ -1066,6 +1071,7 @@ namespace T2TouchId.SepVaultGui
             SepBootstrapStep.ReadVault => "reading vault",
             SepBootstrapStep.UnprotectKeybag => "decrypting keybag",
             SepBootstrapStep.UnprotectPassword => "decrypting password",
+            SepBootstrapStep.Discovery => "BridgeOS discovery",
             SepBootstrapStep.RegisterOol => "register-ool",
             SepBootstrapStep.LoadKeybag => "load-keybag",
             SepBootstrapStep.SetSystemKeybag => "set-system-keybag",

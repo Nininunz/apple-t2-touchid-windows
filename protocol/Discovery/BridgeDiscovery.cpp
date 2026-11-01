@@ -27,6 +27,7 @@
 //                         transport that applies (the caller then gives up), or
 //                         just "not yet" (cancel, silent path, cool-down, no peer).
 #include "BridgeDiscovery.h"
+#include "StartupOrdering.h"
 #include "NativeVerdict.h"
 #include "PortCache.h"
 #include "PortScan.h"
@@ -662,6 +663,8 @@ GateResult EnsureGate(NcmEndpoint* ep, void* cancelEvent) {
 } // namespace
 
 bool PickDefaultT2Endpoint(NcmEndpoint* outEndpoint, void* cancelEvent) {
+    t2::startup::StartupLock ordering(static_cast<HANDLE>(cancelEvent));
+    if (!ordering.owned()) return false;
     if (outEndpoint == nullptr) return false;
     // Peer resolution happens inside the gate, AFTER the link-local address is
     // usable - not inside the adapter enumeration.
@@ -810,6 +813,12 @@ static bool ConnectToBiometricKitBridgeImpl(const NcmEndpoint& endpoint, t2::bri
 bool ConnectToBiometricKitBridge(const NcmEndpoint& endpoint, t2::bridgexpc::Connection* outConn,
                                   uint16_t* outServicePort, uint16_t* outRsdPort,
                                   void* cancelEvent, bool* outScansExhausted) {
+    t2::startup::StartupLock ordering(static_cast<HANDLE>(cancelEvent));
+    if (!ordering.owned()) {
+        if (outScansExhausted) *outScansExhausted = false;
+        T2_DIAG("ordering", L"discovery blocked: gate result=%d", static_cast<int>(ordering.result()));
+        return false;
+    }
     const ULONGLONG t0 = GetTickCount64();
     T2_DIAG("connect", L"connect START ifIndex=%lu peerSource=%d", static_cast<unsigned long>(endpoint.ifIndex),
             static_cast<int>(endpoint.peerSource));

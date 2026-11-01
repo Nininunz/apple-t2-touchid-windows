@@ -1,5 +1,11 @@
 # T2 Touch ID for Windows
 
+> **Fork status:** This fork of [Osaul4ik/apple-t2-touchid-windows](https://github.com/Osaul4ik/apple-t2-touchid-windows)
+> adds a bounded discovery-before-SEP startup fix, validated on MacBookPro16,1.
+> See [the change, evidence, deployment scope and tests](docs/startup-ordering.md).
+> The original license, attribution and project history are retained. No binary
+> release of this fork is published yet; upstream RC1 does not contain this fix.
+
 <img width="1400" height="420" alt="T2 Touch ID for Windows" src="https://github.com/user-attachments/assets/ae5efc29-7ed3-4b4b-96b0-0978328ae352" />
 
 **Windows Hello fingerprint sign-in for Intel Macs with the Apple T2 Security Chip.**

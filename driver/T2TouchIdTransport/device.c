@@ -243,6 +243,8 @@ T2EvtDeviceAdd(
     }
 
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&attributes, T2_DEVICE_CONTEXT);
+    // IOCTL handlers acquire wait locks and perform bounded sleeping polls.
+    attributes.ExecutionLevel = WdfExecutionLevelPassive;
     status = WdfDeviceCreate(&DeviceInit, &attributes, &device);
     if (!NT_SUCCESS(status)) {
         return status;

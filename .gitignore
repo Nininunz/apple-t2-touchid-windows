@@ -1,0 +1,22 @@
+# Build products and local tooling
+.vs/
+**/build/
+**/bin/
+**/obj/
+vcpkg/
+*.user
+*.suo
+*.obj
+*.pdb
+*.ilk
+*.log
+
+# Private provisioning, signing material and machine diagnostics
+user.kb
+sep-vault.bin
+*.pfx
+*.p12
+*.key
+*.etl
+*.dmp
+Diagnostics/
