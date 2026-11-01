@@ -17,6 +17,7 @@
 #include "../../protocol/BiometricKit/Commands.h"
 #include "../../protocol/BiometricKit/VerificationEngine.h"
 #include "../../protocol/Discovery/Adapter.h"
+#include "../../protocol/Discovery/StartupOrdering.h"
 #include "../../protocol/Discovery/PortCache.h"
 #include "../../protocol/Discovery/PortScan.h"
 #include "../../protocol/Discovery/RemoteXpc.h"
@@ -564,6 +565,8 @@ static int CmdNcmStatus() {
 }
 
 static int CmdNetwork(int argc, wchar_t* argv[]) {
+    t2::startup::StartupLock ordering;
+    if (!ordering.owned()) { std::wcerr << L"discovery ordering gate unavailable\n"; return 1; }
     using namespace t2::discovery;
 
     unsigned long ifIndexOverride = 0;
@@ -801,6 +804,8 @@ static int CmdNetwork(int argc, wchar_t* argv[]) {
 // --host fe80::...) starting at argv[firstArgIndex].
 static bool DiscoverBiometricKitBridge(int argc, wchar_t* argv[], int firstArgIndex,
                                         t2::bridgexpc::Connection* outConn) {
+    t2::startup::StartupLock ordering;
+    if (!ordering.owned()) return false;
     using namespace t2::discovery;
     using namespace t2::bridgexpc;
 

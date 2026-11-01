@@ -32,6 +32,8 @@
 #include <vector>
 
 #include "SepVaultFormat.h"
+#include "../../protocol/Discovery/BridgeDiscovery.h"
+#include "../../protocol/Discovery/StartupOrdering.h"
 #include "../../protocol/AppleKeyStore/Client.h"
 #include "../../protocol/BridgeXpc/Log.h"   // shared, TTL-cached registry gates (t2::log)
 
@@ -351,27 +353,8 @@ bool WaitForTransportOpen(t2::applekeystore::Client& client, DWORD timeoutMs) {
 // SEP — every intermediate failure is fail-closed (mirrors
 // VerificationEngine's own stated philosophy: never convert a transport or
 // SEP-level rejection into an implicit success further up the stack).
-bool RunBootstrapSequence(HANDLE readyEvent) {
+bool RunSepInitialization(t2::applekeystore::Client& client, HANDLE readyEvent) {
     using t2::applekeystore::AksResult;
-    using t2::applekeystore::Client;
-
-    Log(L"bootstrap: sequence starting");
-
-    // Opened first, before anything else: every later failure branch needs
-    // an open client to call ReportStatus() through IOCTL_T2_SET_BOOTSTRAP_STATUS.
-    // If this itself fails after the wait window, there is no device to report
-    // through - see ReportStatus's header comment - so that one case stays log-only.
-    Client client;
-    // 60s: CM arrival wakes promptly; bound still covers late PCI/PnP.
-    // Aligns with the reduced BridgeXPC connect window in Queue.cpp (P3.12).
-    if (!WaitForTransportOpen(client, 60000)) {
-        LogEvent(EVENTLOG_ERROR_TYPE,
-            L"bootstrap: could not open T2TouchIdTransport device interface "
-            L"— driver never appeared this boot (PnP / test-sign / install?)");
-        return false;
-    }
-    Log(L"bootstrap: T2TouchIdTransport device interface opened OK");
-
     auto vault = t2::sepvault::ReadVaultFile(kVaultPath);
     if (!vault.ok) {
         Log(L"bootstrap: sep-vault.bin missing or malformed — run SepVaultGui first");
@@ -415,7 +398,7 @@ bool RunBootstrapSequence(HANDLE readyEvent) {
         // macOS boot forces. Retrying from this service will not help;
         // see the file header comment on why this is one-shot-per-boot.
         wchar_t buf[128];
-        swprintf_s(buf, L"bootstrap: load-keybag failed, sep_status=%d (SEP unresponsive)", sepStatus);
+        swprintf_s(buf, L"bootstrap: load-keybag exchange failed; no validated SEP result (status placeholder=%d)", sepStatus);
         Log(buf);
         ReportExchangeFailure(client, exr, T2SepStepLoadKeybag, sepStatus);
         return false;
@@ -500,6 +483,58 @@ bool RunBootstrapSequence(HANDLE readyEvent) {
     ReportStatus(client, T2SepReasonOk, T2SepStepReady, 0);
     SetEvent(readyEvent);
     return true;
+}
+
+// Readiness precedes every vault read and every OOL/AKS operation. The
+// outer gate stays owned through initialization: other patched processes
+// cannot restart port discovery in the gap after the successful HELO.
+bool RunBootstrapSequence(HANDLE readyEvent) {
+    using t2::applekeystore::Client;
+    Client client;
+    if (!WaitForTransportOpen(client, 60000)) {
+        Log(L"bootstrap: transport unavailable before discovery preflight");
+        return false;
+    }
+    t2::startup::Deadline deadline(gStopEvent, 60000);
+    if (!deadline.valid()) {
+        Log(L"bootstrap: discovery deadline could not be created; initialization skipped");
+        ReportStatus(client, T2SepReasonDiscoveryFailed, T2SepStepDiscovery, 0);
+        return false;
+    }
+    t2::startup::StartupLock ordering(deadline.event(), 60000);
+    if (!ordering.owned()) {
+        Log(L"bootstrap: discovery/SEP ordering gate unavailable; initialization skipped");
+        ReportStatus(client, T2SepReasonDiscoveryFailed, T2SepStepDiscovery, 0);
+        return false;
+    }
+    Log(L"bootstrap: discovery preflight START (60s budget; no vault or AKS access)");
+    const auto result = t2::startup::AfterDiscovery(deadline, [&] {
+        while (!deadline.cancelled()) {
+            t2::discovery::NcmEndpoint endpoint;
+            t2::bridgexpc::Connection connection;
+            bool exhausted = false;
+            if (t2::discovery::PickDefaultT2Endpoint(&endpoint, deadline.event()) &&
+                t2::discovery::ConnectToBiometricKitBridge(endpoint, &connection, nullptr,
+                                                          nullptr, deadline.event(), &exhausted)) {
+                int64_t version = 0;
+                const bool verified = connection.GetBridgeVersion(&version, std::chrono::milliseconds(1000));
+                connection.Close();
+                if (verified && !deadline.cancelled()) return true;
+            }
+            if (exhausted || deadline.cancelled()) return false;
+            if (WaitForSingleObject(deadline.event(), 100) == WAIT_OBJECT_0) return false;
+        }
+        return false;
+    }, [&] {
+        Log(L"bootstrap: discovery preflight COMPLETE; SEP initialization START");
+        return RunSepInitialization(client, readyEvent);
+    });
+    if (result == t2::startup::FlowResult::DiscoveryFailed ||
+        result == t2::startup::FlowResult::Cancelled) {
+        Log(L"bootstrap: discovery preflight FAILED/CANCELLED; no vault read, OOL registration or AKS request");
+        ReportStatus(client, T2SepReasonDiscoveryFailed, T2SepStepDiscovery, 0);
+    }
+    return result == t2::startup::FlowResult::Ready;
 }
 
 // Create Global\T2TouchIdBio_LockRequest with a DACL that lets LocalService
@@ -712,6 +747,13 @@ VOID WINAPI ServiceMain(DWORD, LPWSTR*) {
     if (!gStatusHandle) return;
 
     gStatus.dwServiceType = SERVICE_WIN32_OWN_PROCESS;
+    gStopEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (!gStopEvent) {
+        gStatus.dwCurrentState = SERVICE_STOPPED;
+        gStatus.dwWin32ExitCode = GetLastError();
+        SetServiceStatus(gStatusHandle, &gStatus);
+        return;
+    }
     gStatus.dwCurrentState = SERVICE_START_PENDING;
     gStatus.dwControlsAccepted = SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN;
     SetServiceStatus(gStatusHandle, &gStatus);
@@ -755,7 +797,11 @@ VOID WINAPI ServiceMain(DWORD, LPWSTR*) {
         // file, not a crash-restart loop.
     }
 
-    gStopEvent = CreateEventW(nullptr, /*manualReset=*/TRUE, /*initial=*/FALSE, nullptr);
+    if (WaitForSingleObject(gStopEvent, 0) == WAIT_OBJECT_0) {
+        if (readyEvent) CloseHandle(readyEvent);
+        CloseHandle(gStopEvent); gStopEvent = nullptr;
+        return;
+    }
     gLockRequestEvent = CreateLockRequestEvent();
     if (gLockRequestEvent && gStopEvent) {
         gLockThread = CreateThread(nullptr, 0, LockWatcherThread, nullptr, 0, nullptr);

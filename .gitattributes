@@ -1,0 +1,2 @@
+# Preserve upstream line endings while checking whitespace consistently on Windows.
+* whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol

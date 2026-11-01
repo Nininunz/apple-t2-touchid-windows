@@ -32,6 +32,7 @@ namespace T2TouchId.SepVaultGui
         RegisterOolFailed = 4,
         SepHang = 5,
         SepRejected = 6,
+        DiscoveryFailed = 7,
     }
 
     public enum SepBootstrapStep : int
@@ -46,6 +47,7 @@ namespace T2TouchId.SepVaultGui
         UnlockHandle = 7,
         UnlockSpecialBag = 8,
         Ready = 9,
+        Discovery = 10,
     }
 
     // Byte-for-byte mirror of driver/T2TouchIdTransport/public.h's

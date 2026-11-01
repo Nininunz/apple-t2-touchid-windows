@@ -138,9 +138,10 @@ typedef enum _T2_SEP_BOOTSTRAP_REASON
     T2SepReasonVaultMissing      = 2, // sep-vault.bin absent/malformed - run SepVaultGui
     T2SepReasonDpapi             = 3, // CryptUnprotectData failed
     T2SepReasonRegisterOolFailed = 4, // driver/transport-level failure, no SEP exchange attempted
-    T2SepReasonSepHang           = 5, // AKS exchange never got a reply - SEP wedged, needs
-                                       // a macOS boot to hardware-reset it, then reboot to Windows
+    T2SepReasonSepHang           = 5, // legacy name: exchange failed without a validated reply
+                                       // A timeout alone does not establish a hardware hang.
     T2SepReasonSepRejected       = 6, // SEP replied and explicitly rejected (wrong password/keybag)
+    T2SepReasonDiscoveryFailed   = 7, // discovery failed before vault or SEP initialization
 } T2_SEP_BOOTSTRAP_REASON;
 
 typedef enum _T2_SEP_BOOTSTRAP_STEP
@@ -155,6 +156,7 @@ typedef enum _T2_SEP_BOOTSTRAP_STEP
     T2SepStepUnlockHandle      = 7,
     T2SepStepUnlockSpecialBag  = 8,
     T2SepStepReady             = 9,
+    T2SepStepDiscovery         = 10,
 } T2_SEP_BOOTSTRAP_STEP;
 
 typedef struct _T2_BOOTSTRAP_STATUS

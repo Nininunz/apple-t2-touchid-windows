@@ -51,6 +51,7 @@
       <WarningLevel>Level4</WarningLevel>
       <TreatWarningAsError>true</TreatWarningAsError>
       <LanguageStandard>stdcpp17</LanguageStandard>
+      <ExceptionHandling>Sync</ExceptionHandling>
       <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>$(VcpkgInstalledDir)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
@@ -64,6 +65,7 @@
     <ClCompile Include="BridgeXpc\Frame.cpp" />
     <ClCompile Include="BridgeXpc\PlistPayload.cpp" />
     <ClCompile Include="Discovery\Adapter.cpp" />
+    <ClCompile Include="Discovery\BridgeDiscovery.cpp" />
     <ClCompile Include="Discovery\PortCache.cpp" />
     <ClCompile Include="Discovery\PortScan.cpp" />
     <ClCompile Include="Discovery\RemoteXpc.cpp" />
