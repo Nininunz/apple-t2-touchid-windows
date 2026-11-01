@@ -127,4 +127,8 @@
          item without re-adding a real x86 InfVerif.dll story for CI. -->
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <!-- Public packages omit local paths from PDB records (WDK may retain debug metadata). -->
+  <ItemDefinitionGroup Condition="'$(ReleasePackaging)' == 'true'">
+    <Link><GenerateDebugInformation>false</GenerateDebugInformation><AdditionalOptions>%(AdditionalOptions) /PDBALTPATH:$(TargetName).pdb</AdditionalOptions></Link>
+  </ItemDefinitionGroup>
 </Project>

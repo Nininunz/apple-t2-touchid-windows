@@ -78,4 +78,8 @@
     </ProjectReference>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <!-- Public packages omit CodeView/PDB records containing local build paths. -->
+  <ItemDefinitionGroup Condition="'$(ReleasePackaging)' == 'true'">
+    <Link><GenerateDebugInformation>false</GenerateDebugInformation></Link>
+  </ItemDefinitionGroup>
 </Project>

@@ -152,4 +152,8 @@
          .inf as separate steps - see README.md. -->
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <!-- Public packages omit local paths from PDB records (WDK may retain debug metadata). -->
+  <ItemDefinitionGroup Condition="'$(ReleasePackaging)' == 'true'">
+    <Link><GenerateDebugInformation>false</GenerateDebugInformation><AdditionalOptions>%(AdditionalOptions) /PDBALTPATH:$(TargetName).pdb</AdditionalOptions></Link>
+  </ItemDefinitionGroup>
 </Project>
