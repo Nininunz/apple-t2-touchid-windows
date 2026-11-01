@@ -4,7 +4,7 @@ This **test-signed prerelease** updates an existing upstream v0.9 installation o
 
 The fix completes BridgeOS discovery before SEP initialization and serializes discovery/SEP work across bootstrap, UMDF and CLI. A timeout now reports absence of a validated reply rather than claiming a hardware hang. Protocol request bytes and vault format are unchanged.
 
-Hardware evidence: MacBookPro16,1, Windows 11 Pro build 26300. After the ordering fix, LoadKeybag replied in about 85 ms, bootstrap reached ready, CLI verification matched, and the user confirmed Windows Hello worked. This release rebuilds the cleaned source; these exact newly signed binaries and the generic update script have not been installed on hardware. Repeated boot and sleep/resume reliability is not established for this fork.
+Hardware evidence: MacBookPro16,1, Windows 11 Pro build 26300. After the ordering fix, LoadKeybag replied in about 85 ms, bootstrap reached ready, CLI verification matched, and the user confirmed Windows Hello worked. The exact signed release binaries were installed and tested after reboot: bootstrap reported Ready (reason 1, step 9), CLI verification returned verify-match in about 0.77 seconds, and the user confirmed Windows Hello lock-screen sign-in. Installation used the hardware-ID correction and a separate SCM startup restoration; this revised installer combines those two corrections. The combined revised script has passed validation but has not been rerun end to end on hardware. Repeated boot and sleep/resume reliability is not established for this fork.
 
 ## Install an existing v0.9 setup
 
@@ -19,3 +19,8 @@ The update backs up the current SEP and biometric OEM packages and service setti
 If installation fails after services are disabled, do not keep retrying or reboot into a partial update. Use Rollback.md and the printed backup. The public certificate may already have been imported even if a later step fails.
 
 See release.json for the exact source revision, signing identity and upstream dependency provenance. Original LICENSE/NOTICE and libplist licenses are included.
+
+## Installer revision 2 — October 31, 2026
+
+Recognizes the actual root\T2TouchIdBio hardware ID and restores service startup types through Service Control Manager as well as the registry. The signed binaries, driver version and existing release tag are unchanged. The ZIP and its checksum were replaced; download both together.
+

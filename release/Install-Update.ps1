@@ -41,7 +41,7 @@ $devices = @()
 foreach ($d in Get-PnpDevice -PresentOnly) {
     if ($d.InstanceId -notmatch '^(PCI\\VEN_106B&DEV_1802|ROOT\\)') { continue }
     $ids = (Get-PnpDeviceProperty -InstanceId $d.InstanceId -KeyName DEVPKEY_Device_HardwareIds -ErrorAction SilentlyContinue).Data
-    if (@($ids | Where-Object { $_ -match '^(PCI\\VEN_106B&DEV_1802|root\\T2TouchId$)' }).Count -eq 0) { continue }
+    if (@($ids | Where-Object { $_ -match '^(PCI\\VEN_106B&DEV_1802|root\\T2TouchIdBio$)' }).Count -eq 0) { continue }
     $inf = (Get-PnpDeviceProperty -InstanceId $d.InstanceId -KeyName DEVPKEY_Device_DriverInfPath).Data
     if ($inf -notmatch '^oem\d+\.inf$') { throw 'Expected an installed third-party driver package.' }
     $devices += [pscustomobject]@{InstanceId=$d.InstanceId; Inf=$inf}
@@ -97,6 +97,8 @@ try {
     $shortcut.WorkingDirectory = Join-Path $target 'App'
     $shortcut.Save()
     foreach ($s in $state) {
+        $mode = switch ([int]$s.Start) { 2 { 'Automatic' } 3 { 'Manual' } 4 { 'Disabled' } default { throw 'Unexpected service start type' } }
+        Set-Service -Name $s.Name -StartupType $mode
         Set-ItemProperty ("HKLM:\SYSTEM\CurrentControlSet\Services\" + $s.Name) -Name Start -Value $s.Start
         Set-ItemProperty ("HKLM:\SYSTEM\CurrentControlSet\Services\" + $s.Name) -Name DelayedAutoStart -Value $s.DelayedAutoStart
     }
@@ -105,6 +107,3 @@ try {
     Write-Warning "Update incomplete. Services remain disabled to prevent mixed initialization. Follow Rollback.md with backup $backup before rebooting. $($_.Exception.Message)"
     throw
 }
-
-
-
