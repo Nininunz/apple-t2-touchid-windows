@@ -23,6 +23,21 @@ namespace {
 // from a local-class member function.
 constexpr std::chrono::milliseconds kCancelBestEffortTimeout{300};
 
+// Bounded, read-only 0x27 query validated on the target T2. It is used only
+// after a lockout status or a rejected StartMatch, never on the fast path.
+bool ReadSksLockState(bridgexpc::Connection* conn, uint32_t userId,
+                      std::chrono::milliseconds timeout, uint32_t* outState) {
+    std::vector<uint8_t> uid = {
+        static_cast<uint8_t>(userId), static_cast<uint8_t>(userId >> 8),
+        static_cast<uint8_t>(userId >> 16), static_cast<uint8_t>(userId >> 24)};
+    const auto command = EncodeBmCommand(Command::SksLockState, 1, 0, uid);
+    std::vector<uint8_t> reply;
+    int64_t commandStatus = 0;
+    return conn->SendBiometricCommand(command, sizeof(uint32_t), &reply,
+                                      timeout, &commandStatus) &&
+           commandStatus == 0 && ParseSksLockState(reply, outState);
+}
+
 bool Uuid16IsZero(const uint8_t* p) {
     for (int i = 0; i < 16; i++) {
         if (p[i] != 0) return false;
@@ -482,6 +497,14 @@ VerifyOutcome VerificationEngine::Verify(bridgexpc::Connection* conn,
 
     bool startRejected = false;
     if (!sendStartMatch(&startRejected)) {
+        if (startRejected) {
+            uint32_t state = 0;
+            if (ReadSksLockState(conn, config_.macosUserId, config_.ioTimeout, &state) &&
+                (state & kSksFingerprintLockoutMask) != 0) {
+                T2_LOG("verify", L"StartMatch rejected; SKS confirms fingerprint lockout");
+                return VerifyOutcome::BioLockout;
+            }
+        }
         return startRejected ? VerifyOutcome::RejectedByDevice : VerifyOutcome::TransportError;
     }
 
@@ -541,6 +564,7 @@ VerifyOutcome VerificationEngine::Verify(bridgexpc::Connection* conn,
     //   imageTs  = capture time of the matched image, carried in ImageWasAccepted.
     std::optional<uint64_t> barrierOrdinal;
     std::optional<uint64_t> ordFingerOn, ordImageCaptured, imageCaptureTs;
+    bool freshBioLockoutStatus = false;
 
     while (steady_clock::now() < deadline) {
         std::vector<uint8_t> eventPayload;
@@ -609,6 +633,14 @@ VerifyOutcome VerificationEngine::Verify(bridgexpc::Connection* conn,
                             std::memcpy(&ts, eventData.data() + kImageWasAcceptedCaptureTsOffset, 8);
                             imageCaptureTs = ts;
                         }
+                        // Only a status generated after this StartMatch entered
+                        // capture mode can trigger the lockout readback. The
+                        // status name is independently matched to the target
+                        // 25G241 host, but an old queued event is insufficient.
+                        if (IsBioLockoutStatusCandidate(code) &&
+                            eventOrdinal > config_.rejectOrdinalAtOrBelow) {
+                            freshBioLockoutStatus = true;
+                        }
                     }
                     if (StatusCodeIsImagePipeline(code)) imagePipelineEvents++;
                     if (!StatusCodeName(code)) unnamedStatusEvents++;
@@ -631,6 +663,10 @@ VerifyOutcome VerificationEngine::Verify(bridgexpc::Connection* conn,
                                      eventData.size() - kStatusEventBodyFixedFieldsBytes,
                                      (std::min<size_t>)(eventData.size() - kStatusEventBodyFixedFieldsBytes, 48)).c_str()
                            : L"(none)");
+                if (freshBioLockoutStatus) {
+                    T2_LOG("verify", L"fresh status 83 after capture barrier; confirming current SKS state");
+                    break;
+                }
             } else if (embeddedType == kEmbeddedTypeStatistics) {
                 StatisticsEventBody stats = ParseStatisticsEventBody(eventData);
                 T2_LOG("verify",
@@ -731,7 +767,25 @@ VerifyOutcome VerificationEngine::Verify(bridgexpc::Connection* conn,
     if (cancelEvent && bridgexpc::Connection::IsEventSignaled(cancelEvent)) {
         outcome = VerifyOutcome::Cancelled;
     }
-    if (outcome != VerifyOutcome::Cancelled && outcome != VerifyOutcome::TransportError) {
+    if (freshBioLockoutStatus && outcome != VerifyOutcome::Cancelled) {
+        // A status callback alone cannot disable biometric sign-in; confirm
+        // with the same bounded read-only query used by the Windows probe.
+        uint32_t state = 0;
+        if (!ReadSksLockState(conn, config_.macosUserId, config_.ioTimeout, &state)) {
+            T2_LOG("verify", L"SKS lock-state readback failed after fresh status 83; failing closed");
+            outcome = VerifyOutcome::LockoutCheckFailed;
+        } else if ((state & kSksFingerprintLockoutMask) != 0) {
+            T2_LOG("verify", L"SKS confirms fingerprint lockout (bio=%d identification=%d)",
+                   (state & kSksBioLockout) != 0, (state & kSksIdentificationLockout) != 0);
+            outcome = VerifyOutcome::BioLockout;
+        } else {
+            T2_LOG("verify", L"status 83 not corroborated by SKS fingerprint lockout bits; retrying match session");
+            outcome = VerifyOutcome::LockoutSignalUnconfirmed;
+        }
+    }
+    if (outcome != VerifyOutcome::Cancelled && outcome != VerifyOutcome::TransportError &&
+        outcome != VerifyOutcome::BioLockout && outcome != VerifyOutcome::LockoutCheckFailed &&
+        outcome != VerifyOutcome::LockoutSignalUnconfirmed) {
         std::vector<uint8_t> postUserRaw;
         std::vector<uint8_t> postGlobalRaw;
         if (!readUserIdentityList(&postUserRaw) || !readGlobalIdentityList(&postGlobalRaw)) {

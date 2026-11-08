@@ -28,6 +28,11 @@ enum class VerifyOutcome {
     UnstableIdentityInventory, // port of Linux FprintMatchGateError("live identity
                           // inventory is unstable"): first/repeat 0x42 or 0x51 snapshot
                           // disagreed — fail-closed, StartMatch never sent
+    BioLockout,          // fresh status 83 confirmed by read-only SKS 0x27
+    LockoutCheckFailed,  // status 83 was fresh, but SKS could not confirm it;
+                         // fail closed without claiming a fingerprint mismatch
+    LockoutSignalUnconfirmed, // valid SKS read says unlocked after status 83;
+                              // retry the match session without failing WBF
     // REMOVED (17.09.2026): NoImageCaptured used to relabel an ordinary
     // Timeout whenever sawFingerOn && imagePipelineEvents==0 — i.e.
     // whenever status codes 55/72/95 (ImageCaptured/ImageForProcessing/
