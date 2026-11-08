@@ -184,4 +184,14 @@ const wchar_t* MatchIdentityLayoutName(MatchIdentityLayout layout);
 bool ParseIdentityList(const std::vector<uint8_t>& replyBody,
                         std::vector<IdentityRecordV1>* outIdentities);
 
+// Command 0x27 returns one little-endian 32-bit SKS lock-state word. Reject
+// anything other than exactly four bytes so an incomplete reply cannot be
+// mistaken for an unlocked device.
+bool ParseSksLockState(const std::vector<uint8_t>& replyBody, uint32_t* outState);
+
+constexpr uint32_t kSksBioLockout = 0x04;
+constexpr uint32_t kSksIdentificationLockout = 0x40;
+constexpr uint32_t kSksFingerprintLockoutMask =
+    kSksBioLockout | kSksIdentificationLockout;
+
 } // namespace t2::biometrickit

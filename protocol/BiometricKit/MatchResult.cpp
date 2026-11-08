@@ -115,6 +115,10 @@ StatusEventBody ParseStatusEventBody(const std::vector<uint8_t>& eventData) {
     return body;
 }
 
+bool IsBioLockoutStatusCandidate(uint32_t statusCode) {
+    return statusCode == 83;
+}
+
 const wchar_t* EmbeddedTypeName(uint32_t embeddedType) {
     // VERIFIED FROM SOURCE (t2-touchid-linux, enrollment_research/
     // FINDINGS.md, "Raw service-envelope map"): this table is recovered

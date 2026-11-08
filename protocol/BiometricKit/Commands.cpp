@@ -107,4 +107,17 @@ bool ParseIdentityList(const std::vector<uint8_t>& replyBody,
     return true;
 }
 
+bool ParseSksLockState(const std::vector<uint8_t>& replyBody, uint32_t* outState) {
+    if (outState == nullptr || replyBody.size() != sizeof(uint32_t)) {
+        return false;
+    }
+    // Decode explicitly; the wire format is little-endian even if this code
+    // is later compiled for a host with a different native byte order.
+    *outState = static_cast<uint32_t>(replyBody[0]) |
+                (static_cast<uint32_t>(replyBody[1]) << 8) |
+                (static_cast<uint32_t>(replyBody[2]) << 16) |
+                (static_cast<uint32_t>(replyBody[3]) << 24);
+    return true;
+}
+
 } // namespace t2::biometrickit

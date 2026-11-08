@@ -115,6 +115,17 @@ Payload* RetrieveProbedPayload(_In_ WDFREQUEST Request, _Out_ bool* fitsFully)
 // Cold-boot diagnostics: when the CURRENT CAPTURE_DATA reached the driver (0 = none in
 // flight), so a completion / cancellation can say how long it was pending.
 std::atomic<ULONGLONG> g_diagCaptureArrivedTick{0};
+// A verified T2 lockout applies only to the Windows sign-in session in which
+// it was observed. Incrementing the epoch on WTS unlock lets the next lock
+// session re-check the T2. It also prevents a late verify worker from
+// re-caching lockout after a PIN sign-in: it stores its original epoch.
+std::atomic<uint64_t> g_sessionUnlockEpoch{1};
+std::atomic<uint64_t> g_t2BioLockoutEpoch{0};
+bool T2BioLockoutKnownForCurrentSession()
+{
+    return g_t2BioLockoutEpoch.load(std::memory_order_acquire) ==
+           g_sessionUnlockEpoch.load(std::memory_order_acquire);
+}
 const wchar_t* DiagOutcomeName(t2::biometrickit::VerifyOutcome o)
 {
     switch (o) {
@@ -127,6 +138,9 @@ const wchar_t* DiagOutcomeName(t2::biometrickit::VerifyOutcome o)
     case t2::biometrickit::VerifyOutcome::Busy: return L"Busy";
     case t2::biometrickit::VerifyOutcome::Cancelled: return L"Cancelled";
     case t2::biometrickit::VerifyOutcome::UnstableIdentityInventory: return L"UnstableIdentityInventory";
+    case t2::biometrickit::VerifyOutcome::BioLockout: return L"BioLockout";
+    case t2::biometrickit::VerifyOutcome::LockoutCheckFailed: return L"LockoutCheckFailed";
+    case t2::biometrickit::VerifyOutcome::LockoutSignalUnconfirmed: return L"LockoutSignalUnconfirmed";
     default: return L"other";
     }
 }
@@ -286,6 +300,15 @@ void HandleGetSensorStatus(_In_ WDFREQUEST Request)
         out->VendorDiagnostics.Size = 0;
         T2BioLog("  GET_SENSOR_STATUS: SEP not ready -> sensorStatus=%d hr=0x%08x",
                  static_cast<int>(out->SensorStatus), static_cast<unsigned>(hr));
+        WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS, out->PayloadSize);
+        return;
+    }
+
+    if (T2BioLockoutKnownForCurrentSession()) {
+        out->WinBioHresult = WINBIO_E_DEVICE_BUSY;
+        out->SensorStatus = WINBIO_SENSOR_BUSY;
+        out->VendorDiagnostics.Size = 0;
+        T2BioLog("  GET_SENSOR_STATUS: T2 fingerprint lockout known -> BUSY");
         WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS, out->PayloadSize);
         return;
     }
@@ -1432,6 +1455,9 @@ HRESULT MapVerifyOutcomeToHresult(VerifyOutcome outcome)
     case VerifyOutcome::RejectedByDevice:         return WINBIO_E_DEVICE_FAILURE;
     case VerifyOutcome::Busy:                     return WINBIO_E_DATA_COLLECTION_IN_PROGRESS;
     case VerifyOutcome::UnstableIdentityInventory: return WINBIO_E_DEVICE_FAILURE;
+    case VerifyOutcome::BioLockout:              return WINBIO_E_DEVICE_BUSY;
+    case VerifyOutcome::LockoutCheckFailed:      return WINBIO_E_DEVICE_FAILURE;
+    case VerifyOutcome::LockoutSignalUnconfirmed: return WINBIO_E_DEVICE_FAILURE;
     case VerifyOutcome::Malformed:                return E_FAIL;
     // design doc §9.4: Windows called CancelIoEx on the pending CAPTURE_DATA
     // (see EvtCaptureCancel below) — this is the outcome that used to be
@@ -2041,6 +2067,8 @@ void HandleCaptureVerify(_In_ WDFREQUEST Request, const CaptureKey& key)
     // capture slot. Resetting it here would erase the predecessor's cancellation
     // while WaitForCancelledPredecessor is still waiting for that worker.
     HANDLE cancelEvent = GetCaptureCancelEvent();
+    const uint64_t unlockEpochAtCapture =
+        g_sessionUnlockEpoch.load(std::memory_order_acquire);
     CancelableScope cancelScope(Request);
     if (!cancelScope.Arm()) {
         return; // MarkCancelable failed and request has been completed
@@ -2074,6 +2102,7 @@ void HandleCaptureVerify(_In_ WDFREQUEST Request, const CaptureKey& key)
     ULONGLONG handledSuspendGeneration = entryGeneration;
     std::optional<std::array<uint8_t, 16>> matchedUuid;
     VerifyOutcome outcome = VerifyOutcome::TransportError;   // also what a failed connect completes as
+    unsigned unconfirmedLockoutSignals = 0;
 
     // Keep the WBF request pending across system sleep / display-off.
     // Never open SEP while the panel is off (power-button path).
@@ -2158,6 +2187,10 @@ void HandleCaptureVerify(_In_ WDFREQUEST Request, const CaptureKey& key)
                 matchedUuid.reset();
                 uint64_t highestOrdinalSeen = 0;
                 outcome = engine.Verify(&conn, &matchedUuid, cancelEvent, &highestOrdinalSeen);
+                if (outcome == VerifyOutcome::Match || outcome == VerifyOutcome::NoMatch ||
+                    outcome == VerifyOutcome::Timeout) {
+                    unconfirmedLockoutSignals = 0;
+                }
                 T2_DIAG("verify", L"engine.Verify returned %s (%d) connectionLost=%d shortVerify=%d (attempt %d)",
                         DiagOutcomeName(outcome), static_cast<int>(outcome), conn.ConnectionLost() ? 1 : 0,
                         shortVerify ? 1 : 0, attempt);
@@ -2249,6 +2282,25 @@ void HandleCaptureVerify(_In_ WDFREQUEST Request, const CaptureKey& key)
                 // A cancel with no intervening system suspend belongs to WBF
                 // (or a queue stop); do not silently restart the request.
                 break;
+            }
+            if (outcome == VerifyOutcome::LockoutSignalUnconfirmed) {
+                // A valid 0x27 read said the T2 is unlocked, so do not report
+                // biometric lockout to Windows. Restart the match session;
+                // bound repeated contradictory events so the request cannot
+                // spin forever or keep the user at a silent lock screen.
+                if (++unconfirmedLockoutSignals > 2) {
+                    outcome = VerifyOutcome::LockoutCheckFailed;
+                    break;
+                }
+                g_forceLongVerify.store(true, std::memory_order_release);
+                T2BioLog("CAPTURE_DATA(verify): status 83 unconfirmed by SKS; retrying %u/2",
+                         unconfirmedLockoutSignals);
+                if (cancelEvent) {
+                    WaitForSingleObject(cancelEvent, kSessionLostCooldownMs);
+                } else {
+                    Sleep(kSessionLostCooldownMs);
+                }
+                continue;
             }
             if (outcome == VerifyOutcome::TransportError && connectionRetryExhausted) {
                 // The BridgeXPC session kept dropping. That alone does not end
@@ -2353,14 +2405,23 @@ void HandleCaptureVerify(_In_ WDFREQUEST Request, const CaptureKey& key)
     // Never complete CAPTURE as CANCELED solely for display-off — that breaks
     // the pending WBF contact after sleep.
 
+    if (outcome == VerifyOutcome::BioLockout) {
+        g_t2BioLockoutEpoch.store(unlockEpochAtCapture, std::memory_order_release);
+    } else if (outcome == VerifyOutcome::Match) {
+        g_t2BioLockoutEpoch.store(0, std::memory_order_release);
+    }
+
     const HRESULT hr = MapVerifyOutcomeToHresult(outcome);
     T2BioLog("CAPTURE_DATA(verify): outcome=%d -> hresult=0x%08x", static_cast<int>(outcome),
              static_cast<unsigned>(hr));
     // ACCEPT only for a delivered sample (a real Match); see the note in
     // HandleCaptureEnroll. Failures stay FAILURE, everything else READY.
     const WINBIO_SENSOR_STATUS sensorStatus =
+        outcome == VerifyOutcome::BioLockout ? WINBIO_SENSOR_BUSY :
         (outcome == VerifyOutcome::TransportError || outcome == VerifyOutcome::RejectedByDevice ||
-         outcome == VerifyOutcome::UnstableIdentityInventory)
+         outcome == VerifyOutcome::UnstableIdentityInventory ||
+         outcome == VerifyOutcome::LockoutCheckFailed ||
+         outcome == VerifyOutcome::LockoutSignalUnconfirmed)
             ? WINBIO_SENSOR_FAILURE
             : (outcome == VerifyOutcome::Match ? WINBIO_SENSOR_ACCEPT : WINBIO_SENSOR_READY);
     // A sample goes to WBF only for a real Match; every other outcome completes
@@ -2592,6 +2653,12 @@ void HandleCaptureData(_In_ WDFREQUEST Request)
     T2_DIAG("capture", L"CAPTURE_DATA ARRIVED purpose=0x%02x flags=0x%02x (WBF asks for a touch)",
             static_cast<unsigned>(key.Purpose), static_cast<unsigned>(key.Flags));
     t2::transport::DiagTransportSnapshot(L"CAPTURE_DATA arrived");
+
+    if (T2BioLockoutKnownForCurrentSession()) {
+        T2BioLog("CAPTURE_DATA: T2 fingerprint lockout known -> BUSY; no sensor operation");
+        CompleteCaptureData(Request, WINBIO_E_DEVICE_BUSY, WINBIO_SENSOR_BUSY, 0, {});
+        return;
+    }
 
     // Gate: never touch the SEP - no ConnectForCapture, no busy-slot, no
     // actual fingerprint read - until T2SepBootstrap has reported the SEP
@@ -3036,6 +3103,10 @@ LRESULT CALLBACK SessionLockWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             // Drops a stale "IPv6 unavailable" verdict and asks for ONE native-IPv6
             // re-check of a committed tunnel; the next connect (no live session) runs it.
             t2::transport::RequestNativeReprobe();
+            // This is only a re-check invitation for the next lock session.
+            // A successful Windows PIN/password sign-in does not authorize
+            // clearing SEP lockout or replaying the one-shot AKS bootstrap.
+            g_sessionUnlockEpoch.fetch_add(1, std::memory_order_acq_rel);
         }
         // Every other WM_WTSSESSION_CHANGE type is intentionally ignored.
         return 0;

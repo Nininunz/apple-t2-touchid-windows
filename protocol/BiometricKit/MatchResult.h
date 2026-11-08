@@ -98,6 +98,13 @@ struct StatusEventBody {
 // the whole event.
 StatusEventBody ParseStatusEventBody(const std::vector<uint8_t>& eventData);
 
+// On the matching 25G241 macOS host, status 83 is named
+// FingerOnInBioLockout. A Windows lockout trace also emitted 83 after the
+// current StartMatch entered capture mode, alongside a read-only SKS 0x27
+// result with both fingerprint lockout bits set. This is only a candidate:
+// Verify must confirm the live SKS state before reporting lockout.
+bool IsBioLockoutStatusCandidate(uint32_t statusCode);
+
 // Human-readable name for any embedded_type this connection can receive
 // (VERIFIED FROM SOURCE — see .cpp). Never affects parsing/outcome logic,
 // diagnostic-only.

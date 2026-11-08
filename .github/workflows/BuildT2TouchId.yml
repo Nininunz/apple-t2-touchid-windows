@@ -242,14 +242,50 @@ jobs:
           exit 1
         }
 
+        $coinstallerPath = "build\T2SepCoInstaller\$env:PLATFORM\$env:CONFIGURATION\T2SepCoInstaller.dll"
+        $bootstrapPath = "build\T2SepBootstrap\$env:PLATFORM\$env:CONFIGURATION\T2SepBootstrap.exe"
+        if (-not (Test-Path $coinstallerPath)) {
+          Write-Error "Built co-installer not found: $coinstallerPath"
+          exit 1
+        }
+        if (-not (Test-Path $bootstrapPath)) {
+          Write-Error "Built bootstrap service not found: $bootstrapPath"
+          exit 1
+        }
+
+        $vcpkgBinDir = Join-Path $env:VCPKG_INSTALLED_DIR "bin"
+        $runtimeDlls = @(Get-ChildItem -Path $vcpkgBinDir -Filter "*.dll" -ErrorAction Stop)
+        if ($runtimeDlls.Count -eq 0 -or -not ($runtimeDlls | Where-Object { $_.Name -match 'plist' })) {
+          Write-Error "Bootstrap runtime DLLs, including libplist, not found under $vcpkgBinDir"
+          exit 1
+        }
+
         New-Item -ItemType Directory -Path $packageDir -Force | Out-Null
         Copy-Item -Path $sysPath -Destination $packageDir -Force
         Copy-Item -Path $infSrcPath -Destination $packageDir -Force
+        Copy-Item -Path $coinstallerPath -Destination $packageDir -Force
+        Copy-Item -Path $bootstrapPath -Destination $packageDir -Force
+        $runtimeDlls | ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $packageDir -Force }
 
         $pdbPath = "$buildOutDir\$env:DRIVER_NAME.pdb"
         if (Test-Path $pdbPath) {
           Copy-Item -Path $pdbPath -Destination $packageDir -Force
         }
+
+        # PnP copies only files named by the INF. Install the bootstrap's
+        # vcpkg DLLs beside its EXE in System32\T2SepBootstrap.
+        $infFull = (Resolve-Path (Join-Path $packageDir "$env:DRIVER_NAME.inf")).Path
+        $inf = [System.IO.File]::ReadAllText($infFull)
+        if ($inf -notmatch '(?m)^\[SourceDisksFiles\]\r?$' -or
+            $inf -notmatch '(?m)^\[T2SepBootstrap_CopyFiles\]\r?$') {
+          Write-Error "Bootstrap runtime sections missing from INF: $infFull"
+          exit 1
+        }
+        $sourceLines = ($runtimeDlls | ForEach-Object { "$($_.Name) = 1,," }) -join "`r`n"
+        $copyLines = ($runtimeDlls | ForEach-Object { $_.Name }) -join "`r`n"
+        $inf = [regex]::Replace($inf, '(?m)^\[SourceDisksFiles\]\r?$', "[SourceDisksFiles]`r`n$sourceLines")
+        $inf = [regex]::Replace($inf, '(?m)^\[T2SepBootstrap_CopyFiles\]\r?$', "[T2SepBootstrap_CopyFiles]`r`n$copyLines")
+        [System.IO.File]::WriteAllText($infFull, $inf, (New-Object System.Text.UTF8Encoding($false)))
 
         Write-Host "OK: staged driver files:"
         Get-ChildItem $packageDir | ForEach-Object { Write-Host "  - $($_.Name)" }
@@ -402,19 +438,7 @@ jobs:
       run: |
         $ErrorActionPreference = "Stop"
         Copy-Item -Path "build\t2touchid\$env:PLATFORM\$env:CONFIGURATION\t2touchid.exe" -Destination $env:PACKAGE_DIR -Force
-
-        # Same dynamic-plist dependency as T2TouchIdTests.exe (see that
-        # step) - t2touchid.exe needs plist-2.0.dll and its own
-        # dependencies alongside it, or it fails to launch on a machine
-        # that doesn't happen to have vcpkg's bin dir on PATH.
-        $vcpkgBinDir = Join-Path $env:VCPKG_INSTALLED_DIR "bin"
-        if (-not (Test-Path $vcpkgBinDir)) {
-          Write-Error "vcpkg bin dir not found: $vcpkgBinDir"
-          exit 1
-        }
-        Copy-Item -Path (Join-Path $vcpkgBinDir "*.dll") -Destination $env:PACKAGE_DIR -Force
-
-        Write-Host "OK: staged t2touchid.exe and its runtime DLLs"
+        Write-Host "OK: staged t2touchid.exe and its previously bundled runtime DLLs"
       shell: pwsh
 
     - name: Upload driver + tool package

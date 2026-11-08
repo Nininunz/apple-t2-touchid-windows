@@ -1,29 +1,19 @@
 name: PrefastFullBuild
 
-
+# Full package validation for PRs changing installer, GUI, or solution inputs.
+# Driver-only PRs use the focused NCM, SEP, and Bio workflows instead.
 on:
-  push:
-    branches: [ main, Dev_lifecycle, Hello_Prepare ]
-    paths:
-      - 'T2NCM/**'
-      - 'driver/**'
-      - 'protocol/**'
-      - 'tools/**'
-      - 'T2TouchId.sln'
-      - '.github/workflows/CiAppleT2TouchId.yml'
   pull_request:
     branches: [ main, Dev_lifecycle ]
     paths:
-      - 'T2NCM/**'
-      - 'driver/**'
-      - 'protocol/**'
       - 'tools/**'
+      - 'driver/T2TouchIdBio/*'
       - 'T2TouchId.sln'
-      - '.github/workflows/CiAppleT2TouchId.yml'
+      - '.github/workflows/PrefastFullBuild.yml'
   workflow_dispatch:
 
 concurrency:
-  group: ci-apple-t2-touchid-${{ github.ref }}
+  group: ci-apple-t2-touchid-prefast-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:

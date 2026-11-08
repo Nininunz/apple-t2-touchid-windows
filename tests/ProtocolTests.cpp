@@ -357,6 +357,48 @@ static void TestStatusCodeNames_UnverifiedTable() {
     CHECK(!biometrickit::StatusCodeIsImagePipeline(90));
 }
 
+static void TestBioLockoutStatusCandidate() {
+    // The matching 25G241 host identified status 83 as FingerOnInBioLockout.
+    // Feed the actual status-body shape through the parser before classifying.
+    std::vector<uint8_t> body(52, 0);
+    const uint32_t lockoutCode = 83;
+    const uint64_t statusDataLength = 36;
+    std::memcpy(body.data(), &lockoutCode, sizeof(lockoutCode));
+    std::memcpy(body.data() + 8, &statusDataLength, sizeof(statusDataLength));
+    const auto lockout = biometrickit::ParseStatusEventBody(body);
+    CHECK(lockout.statusCode.has_value());
+    CHECK(lockout.statusDataLength == statusDataLength);
+    if (lockout.statusCode) {
+        CHECK(biometrickit::IsBioLockoutStatusCandidate(*lockout.statusCode));
+    }
+
+    // 78 is ScanTooShort on that host and appeared alongside 83 in the
+    // captured failed scan. It must never be interpreted as a lockout.
+    CHECK(!biometrickit::IsBioLockoutStatusCandidate(78));
+    CHECK(!biometrickit::IsBioLockoutStatusCandidate(63)); // FingerOn
+    CHECK(!biometrickit::IsBioLockoutStatusCandidate(0));
+
+    // A truncated body has no status code and provides no lockout evidence.
+    body.resize(3);
+    CHECK(!biometrickit::ParseStatusEventBody(body).statusCode.has_value());
+}
+
+static void TestSksLockState_ExactFourByteLittleEndian() {
+    uint32_t state = 0;
+    CHECK(biometrickit::ParseSksLockState({0x44, 0x00, 0x00, 0x00}, &state));
+    CHECK(state == 0x44); // captured bio + identification lockout
+    CHECK((state & biometrickit::kSksFingerprintLockoutMask) == 0x44);
+
+    state = 0;
+    CHECK(biometrickit::ParseSksLockState({0x08, 0x02, 0x00, 0x00}, &state));
+    CHECK(state == 0x208); // captured unlocked state after S4
+    CHECK((state & biometrickit::kSksFingerprintLockoutMask) == 0);
+
+    CHECK(!biometrickit::ParseSksLockState({0x44, 0x00, 0x00}, &state));
+    CHECK(!biometrickit::ParseSksLockState({0x44, 0x00, 0x00, 0x00, 0x00}, &state));
+    CHECK(!biometrickit::ParseSksLockState({0x44, 0x00, 0x00, 0x00}, nullptr));
+}
+
 static void TestLinuxIdentityCapacitiesAndGlobalCommand() {
     // These two CHECKs compare compile-time constants, so MSVC folds the
     // condition and flags C4127 ("conditional expression is constant"),
@@ -581,6 +623,8 @@ int wmain() {
     TestMatchPayload_PaddedIsAlsoSixtyEight();
     TestMatchPayload_LegacyIsTheOldOneHundredThirtyTwo();
     TestStatusCodeNames_UnverifiedTable();
+    TestBioLockoutStatusCandidate();
+    TestSksLockState_ExactFourByteLittleEndian();
     TestStatisticsEventBody_DecodesTypeAndValue();
     TestLinuxIdentityCapacitiesAndGlobalCommand();
 
