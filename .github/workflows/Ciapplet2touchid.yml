@@ -33,6 +33,8 @@ name: CI Apple T2 TouchId (CodeQL + PREfast + Build + Package)
 #
 # ===========================================================================
 
+# Full CodeQL/package validation on integration-branch pushes. Focused PR
+# workflows cover driver changes; a PR changing this workflow also runs it.
 on:
   push:
     branches: [ main, Dev_lifecycle, Hello_Prepare ]
@@ -42,20 +44,15 @@ on:
       - 'protocol/**'
       - 'tools/**'
       - 'T2TouchId.sln'
-      - '.github/workflows/CiAppleT2TouchId.yml'
+      - '.github/workflows/Ciapplet2touchid.yml'
   pull_request:
     branches: [ main, Dev_lifecycle ]
     paths:
-      - 'T2NCM/**'
-      - 'driver/**'
-      - 'protocol/**'
-      - 'tools/**'
-      - 'T2TouchId.sln'
-      - '.github/workflows/CiAppleT2TouchId.yml'
+      - '.github/workflows/Ciapplet2touchid.yml'
   workflow_dispatch:
 
 concurrency:
-  group: ci-apple-t2-touchid-${{ github.ref }}
+  group: ci-apple-t2-touchid-codeql-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
